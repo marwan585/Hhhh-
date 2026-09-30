@@ -1,0 +1,33 @@
+{
+  "name": "cloud-wa-tools",
+  "version": "1.0.0",
+  "description": "CLOUD WA TOOLS - Real WhatsApp management & messaging CLI for Terminal/Termux/Linux/VPS (real pairing code, campaigns, queue, consent, storage, backup)",
+  "license": "MIT",
+  "main": "src/cli/main.js",
+  "bin": {
+    "cloud-wa": "bin/cloud-wa.js"
+  },
+  "scripts": {
+    "start": "node bin/cloud-wa.js",
+    "test": "node --test",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "whatsapp",
+    "cli",
+    "termux",
+    "campaign",
+    "messaging"
+  ],
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "dotenv": "^16.4.5",
+    "picocolors": "^1.1.1",
+    "pino": "^9.4.0",
+    "sql.js": "^1.13.0",
+    "xlsx": "^0.18.5"
+  }
+}

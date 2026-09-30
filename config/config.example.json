@@ -1,0 +1,25 @@
+{
+  "database_path": "./data/database.sqlite",
+  "session_path": "./data/sessions",
+  "log_path": "./logs",
+  "message_storage": "./data/messages",
+  "media_storage": "./data/media",
+  "backup_path": "./data/backups",
+  "export_path": "./data/exports",
+
+  "default_country_code": "62",
+  "name_fallback": "",
+
+  "min_delay": 6,
+  "max_delay": 15,
+  "messages_per_session": 50,
+  "cooldown_hours": 24,
+  "max_retry": 3,
+
+  "archive_after_send": true,
+  "verify_recipients": true,
+  "save_incoming_messages": true,
+  "media_archive": true,
+
+  "log_retention_days": 30
+}

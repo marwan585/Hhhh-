@@ -1,0 +1,6 @@
+# Contoh file recipient TXT untuk CLOUD WA TOOLS
+# Satu nomor per baris (format internasional, tanpa tanda + juga boleh).
+# Baris yang diawali # diabaikan.
+628123456789
+628987654321
+628111111111

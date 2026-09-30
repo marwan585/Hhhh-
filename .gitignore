@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Secrets - never commit
+.env
+.env.local
+
+# Configuration with local values (config.example.json IS committed)
+config/config.json
+
+# Application data (database, SESSIONS, messages, media, backups)
+data/
+*.sqlite
+*.sqlite.tmp
+*.sqlite.corrupt-*
+*.sqlite-wal
+*.sqlite-shm
+
+# Logs
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
