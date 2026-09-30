@@ -1,6 +1,6 @@
 {
   "name": "cloud-wa-tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLOUD WA TOOLS - Real WhatsApp management & messaging CLI for Terminal/Termux/Linux/VPS (real pairing code, campaigns, queue, consent, storage, backup)",
   "license": "MIT",
   "main": "src/cli/main.js",

@@ -15,6 +15,11 @@ const {
 const pino = require('pino');
 const { now } = require('../utils/datetime');
 
+/* Test seam (unit tests only - production always uses the real library).
+ * Lets tests inject a stub Baileys so pairing logic can be verified without
+ * touching the real WhatsApp network. */
+let baileysLib = baileys;
+
 /* ---------------------------------------------------------------------------
  * WhatsApp connection built on Baileys (WhatsApp Web Multi-Device protocol).
  *
@@ -54,6 +59,15 @@ class WhatsAppConnection extends EventEmitter {
     this._pairCtx = null;
     this._resolveOpen = null;
     this._rejectOpen = null;
+    this._pairPending = null;   // pairing armed for the CURRENT socket
+    this._pairTimer = null;     // fallback timer if no QR event arrives
+    this._waVersion = null;     // cached WA Web version from the server
+    // Tunables (unit tests shorten these to keep the suite fast)
+    this._pairReadyFallbackMs = 8000;    // request pairing even without QR after this
+    this._pairRequestDelays = [0, 5000, 10000];
+    this._pairRequestTimeoutMs = 20000;
+    this._pairRetryDelay = 2000;         // delay before a clean pairing restart
+    this._pairMaxRetries = 2;
   }
 
   setState(s) {
@@ -91,6 +105,7 @@ class WhatsAppConnection extends EventEmitter {
   connect({ phone, onPairingCode, onStatus } = {}) {
     this._wantConnection = true;
     this._autoRetries = 0;
+    this._pairPending = null;
     this._pairCtx = { phone: phone ? String(phone).replace(/\D/g, '') : null, onPairingCode, onStatus };
     return new Promise((resolve, reject) => {
       this._resolveOpen = resolve;
@@ -99,63 +114,119 @@ class WhatsAppConnection extends EventEmitter {
     });
   }
 
-  _start() {
+  /** Fetch the current WhatsApp Web version from the server (cached). */
+  async _fetchVersion() {
+    if (this._waVersion) return this._waVersion;
+    try {
+      const res = await baileysLib.fetchLatestBaileysVersion();
+      if (res && Array.isArray(res.version)) {
+        this._waVersion = res.version;
+        this.logger.debug(`Using WhatsApp Web version ${res.version.join('.')}`);
+      }
+    } catch (e) {
+      this.logger.debug(`Could not fetch latest WA version (using library default): ${e.message}`);
+    }
+    return this._waVersion;
+  }
+
+  _clearPairTimer() {
+    if (this._pairTimer) { clearTimeout(this._pairTimer); this._pairTimer = null; }
+  }
+
+  /** Request the pairing code for the CURRENT socket (readiness gate passed). */
+  _armPairingRequest() {
+    const ctx = this._pairCtx || {};
+    if (!ctx.phone || !this._pairPending) return;
+    const sock = this.sock;
+    this._clearPairTimer();
+    this._pairPending.requested = true;
+    this._requestPairing(ctx.phone, ctx.onPairingCode, sock).catch((e) => {
+      // Only fail the connect promise if this socket is still the current one;
+      // a stale socket's rejection must not kill a newer pairing attempt.
+      if (this.sock === sock && this._wantConnection) {
+        this._failOpen(new Error(`Pairing failed: ${e.message}`));
+      }
+    });
+  }
+
+  async _start() {
     fs.mkdirSync(this.paths.sessions, { recursive: true });
     const ctx = this._pairCtx || {};
     const logger = pino({ level: 'silent' });
-    useMultiFileAuthState(this.paths.sessions)
-      .then(({ state, saveCreds }) => {
-        const registered = !!state.creds.registered;
-        const socketOpts = {
-          auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, logger),
-          },
-          logger,
-          printQRInTerminal: false,
-          browser: Browsers.ubuntu('Chrome'),
-          markOnlineOnConnect: false,
-          syncFullHistory: false,
-          generateHighQualityLinkPreview: false,
-        };
-        const sock = makeWASocket(socketOpts);
-        this.sock = sock;
-        // Let the app attach event handlers (incoming messages, media) to
-        // every socket instance - including after automatic reconnects.
-        if (typeof this.onSocket === 'function') {
-          try { this.onSocket(sock); } catch (e) { this.logger.error(`onSocket hook error: ${e.message}`); }
-        }
-        this.setState(registered ? STATE.CONNECTING : STATE.PAIRING);
-        if (ctx.onStatus) ctx.onStatus(this.state);
+    try {
+      const version = await this._fetchVersion();
+      const { state, saveCreds } = await baileysLib.useMultiFileAuthState(this.paths.sessions);
+      const registered = !!state.creds.registered;
+      const socketOpts = {
+        auth: {
+          creds: state.creds,
+          keys: baileysLib.makeCacheableSignalKeyStore(state.keys, logger),
+        },
+        logger,
+        printQRInTerminal: false,
+        version: version || undefined,
+        browser: baileysLib.Browsers.ubuntu('Chrome'),
+        markOnlineOnConnect: false,
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+      };
+      const sock = baileysLib.makeWASocket(socketOpts);
+      this.sock = sock;
+      // Let the app attach event handlers (incoming messages, media) to
+      // every socket instance - including after automatic reconnects.
+      if (typeof this.onSocket === 'function') {
+        try { this.onSocket(sock); } catch (e) { this.logger.error(`onSocket hook error: ${e.message}`); }
+      }
+      this.setState(registered ? STATE.CONNECTING : STATE.PAIRING);
+      if (ctx.onStatus) ctx.onStatus(this.state);
 
-        sock.ev.on('creds.update', saveCreds);
+      sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', (u) => {
-          this._onConnectionUpdate(u, { registered });
-        });
+      sock.ev.on('connection.update', (u) => {
+        this._onConnectionUpdate(u, { registered });
+      });
 
-        sock.ev.on('messages.update', (updates) => {
-          this._onMessagesUpdate(updates);
-        });
+      sock.ev.on('messages.update', (updates) => {
+        this._onMessagesUpdate(updates);
+      });
 
-        if (!registered && ctx.phone) {
-          this._requestPairing(ctx.phone, ctx.onPairingCode).catch((e) => {
-            this._failOpen(new Error(`Pairing failed: ${e.message}`));
-          });
-        } else if (!registered && !ctx.phone) {
-          this._failOpen(new Error('NO_SESSION'));
-        }
-      })
-      .catch((e) => this._failOpen(new Error(`Cannot start WhatsApp socket: ${e.message}`)));
+      if (!registered && ctx.phone) {
+        // Do NOT request the pairing code immediately: the socket has not
+        // finished its handshake yet and an early request is rejected with
+        // "Connection Closed"/401. Wait for the first QR event (proof the
+        // handshake completed); fall back to a timer if no QR arrives.
+        this._pairPending = { requested: false };
+        this._pairTimer = setTimeout(() => {
+          if (this._pairPending && !this._pairPending.requested) {
+            this.logger.debug('No QR event - requesting pairing code via fallback timer');
+            this._armPairingRequest();
+          }
+        }, this._pairReadyFallbackMs);
+      } else if (!registered && !ctx.phone) {
+        this._failOpen(new Error('NO_SESSION'));
+      }
+    } catch (e) {
+      this._failOpen(new Error(`Cannot start WhatsApp socket: ${e.message}`));
+    }
   }
 
-  async _requestPairing(phoneDigits, onPairingCode) {
-    const delays = [0, 3000, 6000];
+  async _requestPairing(phoneDigits, onPairingCode, sock) {
+    const delays = this._pairRequestDelays;
     for (let i = 0; i < delays.length; i++) {
       if (delays[i]) await new Promise((r) => setTimeout(r, delays[i]));
-      if (!this.sock || !this._wantConnection) throw new Error('connection cancelled');
+      // If the socket was replaced/died while waiting, stop hammering it -
+      // the close handler owns reconnection from here.
+      if (!this._wantConnection || !this.sock || this.sock !== sock) {
+        throw new Error('pairing socket changed');
+      }
       try {
-        const raw = await this.sock.requestPairingCode(phoneDigits);
+        const raw = await Promise.race([
+          sock.requestPairingCode(phoneDigits),
+          new Promise((_, rej) => {
+            const t = setTimeout(() => rej(new Error('pairing request timed out')), this._pairRequestTimeoutMs);
+            if (t.unref) t.unref();
+          }),
+        ]);
         const code = String(raw || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
         if (!code) throw new Error('empty pairing code');
         const formatted = code.slice(0, 4) + '-' + code.slice(4, 8);
@@ -173,6 +244,13 @@ class WhatsAppConnection extends EventEmitter {
 
   _onConnectionUpdate(u, { registered }) {
     const { connection, lastDisconnect } = u || {};
+
+    // The first QR event proves the socket handshake with WhatsApp servers
+    // is complete - this is the safe moment to request a pairing code.
+    if (u && u.qr && this._pairPending && !this._pairPending.requested) {
+      this.logger.debug('Handshake ready (QR received) - requesting pairing code');
+      this._armPairingRequest();
+    }
 
     if (connection === 'open') {
       this._autoRetries = 0;
@@ -200,11 +278,33 @@ class WhatsAppConnection extends EventEmitter {
   }
 
   _onClose(code, registered) {
-    const D = DisconnectReason || {};
+    const D = baileysLib.DisconnectReason || {};
+    this._clearPairTimer();
     this.logger.info(`WhatsApp connection closed (code ${code === undefined ? 'unknown' : code})`);
     this.setState(STATE.DISCONNECTED);
 
-    // Session dead: logged out from phone / forbidden.
+    // Fresh pairing rejected (there is NO session yet - "logged out" is
+    // misleading here). Clean the partial session files and retry with a
+    // brand-new socket instead of claiming the session expired.
+    if (!registered && (code === D.loggedOut || code === 401 || code === 403)) {
+      if (this._wantConnection && this._autoRetries < this._pairMaxRetries) {
+        this._autoRetries += 1;
+        this.logger.warn(`Pairing attempt ${this._autoRetries}/${this._pairMaxRetries} failed (code ${code}) - restarting with a clean session...`);
+        this.emit('pairing_retry', this._autoRetries);
+        if (this._pairCtx && this._pairCtx.onStatus) this._pairCtx.onStatus(STATE.PAIRING, this._autoRetries);
+        this._clearSessionFiles();
+        setTimeout(() => {
+          if (this._wantConnection) this._start();
+        }, this._pairRetryDelay);
+        return;
+      }
+      this._wantConnection = false;
+      this.logger.error('Pairing failed repeatedly. Check your internet connection, make sure the number is active on WhatsApp, then try again.');
+      this._failOpen(new Error('PAIRING_FAILED'));
+      return;
+    }
+
+    // Session dead: logged out from phone / forbidden (a REAL session existed).
     if (code === D.loggedOut || code === 401 || code === 403) {
       this._wantConnection = false;
       this.logger.error('WhatsApp session expired or was logged out from the phone. Delete the session and pair again.');
@@ -307,6 +407,8 @@ class WhatsAppConnection extends EventEmitter {
   /** Gracefully end the current socket (saved session stays on disk). */
   end() {
     this._wantConnection = false;
+    this._clearPairTimer();
+    this._pairPending = null;
     try {
       if (this.sock) this.sock.end(new Error('client closed'));
     } catch (_) { /* ignore */ }
@@ -340,4 +442,4 @@ class WhatsAppConnection extends EventEmitter {
   }
 }
 
-module.exports = { WhatsAppConnection, STATE, downloadContentFromMessage };
+module.exports = { WhatsAppConnection, STATE, downloadContentFromMessage, __setBaileysLib: (lib) => { baileysLib = lib; } };

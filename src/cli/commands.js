@@ -132,8 +132,13 @@ async function cmdConnect(ctx, flags) {
     keepAlive();
     return 0;
   } catch (e) {
-    console.log(pc.red(`✗ Connection failed: ${e.message || e}`));
-    ctx.logger.error(`Command connect failed: ${e.message || e}`);
+    const msg = e.message || String(e);
+    if (msg === 'PAIRING_FAILED') {
+      console.log(pc.red('✗ Pairing failed after several attempts. Check your internet, make sure the number is active on WhatsApp, then try again.'));
+    } else {
+      console.log(pc.red(`✗ Connection failed: ${msg}`));
+    }
+    ctx.logger.error(`Command connect failed: ${msg}`);
     return 1;
   }
 }

@@ -563,7 +563,7 @@ WA_LIVE_TEST=1 WA_TEST_NUMBER=+628xxxx WA_TEST_TO=+628yyyy \
 | Masalah | Penyebab & solusi |
 |---|---|
 | `Node.js not found` | Install Node.js 20+ (`pkg install nodejs` / NodeSource). Lalu `cloud-wa check` |
-| Pairing code gagal diminta | Koneksi internet lambat — aplikasi mencoba ulang otomatis (3x). Coba lagi |
+| Pairing code gagal diminta (`Connection Closed` / 401) | Sudah ditangani otomatis: aplikasi menunggu handshake selesai (event QR) sebelum meminta pairing code, mencoba ulang, dan bila perlu memulai ulang pairing dengan sesi bersih (maks. 2x). Pastikan internet stabil dan nomor aktif di WhatsApp |
 | `SESSION_EXPIRED` / keluar dari HP | Menu `[9]` → `Delete Session` → `Connect` lalu pairing ulang |
 | `Connection replaced` | Session dibuka di perangkat lain; tutup yang lain lalu Reconnect |
 | Koneksi terputus berkali-kali di Termux | Matikan optimasi baterai untuk Termux; hindari mode hemat daya agresif; aplikasi auto-reconnect hingga 8x |

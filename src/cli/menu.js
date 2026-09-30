@@ -123,6 +123,9 @@ async function connectFlow(ctx) {
       }
     } else if (msg === 'CONNECTION_REPLACED') {
       ui.errorLine('Connection replaced by another WhatsApp Web/Desktop session.');
+    } else if (msg === 'PAIRING_FAILED') {
+      ui.errorLine('Pairing failed after several attempts. Check your internet, make sure the');
+      ui.errorLine('number is active on WhatsApp, then choose Connect again.');
     } else if (msg === 'NO_SESSION') {
       ui.errorLine('No usable session found. Connect with your WhatsApp number.');
     } else if (msg === 'CONNECTION_FAILED') {
